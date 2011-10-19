@@ -1,0 +1,4 @@
+How to make ramdisk image?
+
+1) Copy ramdisk, that was built from cyanogenmod to cpf
+2) mkbootfs fathom_ramdisk | gzip > initrd.gz

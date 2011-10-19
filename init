@@ -1,0 +1,139 @@
+#!/bin/sh
+
+# by www2287 (xProgerx)
+# based on dan1j3l script
+
+mkdir -m 0755 /proc
+mount -t proc proc /proc
+mkdir -m 0755 /sys
+mount -t sysfs sys /sys
+
+#Configure Devices
+MAKEDEVS
+
+echo "MAKEDEVS"
+sleep 10
+
+fail() {
+    echo "Failed"
+    echo "$1" 
+#>> /newroot/sdcard/12.txt
+    exec /bin/sh
+}
+inf(){ 
+  echo "$1"
+  #sleep 10
+#>> /newroot/sdcard/12.txt
+}
+while [ ! -d /sys/block/mmcblk0 ] ; do
+    echo "Waiting for SD Card"
+    sleep 1
+done
+#Wait a bit once mmcblk0 appears
+#Reading partition table could take some time
+sleep 2
+
+mkdir -m 0777 /newroot
+inf "mkdir newroot"
+mount -t tmpfs -o size=15M tmpfs /newroot
+inf "mount tmpfs on newroot"
+
+partition="mmcblk0p1"
+
+# Try unpartitioned card
+#if [ ! -d /sys/block/mmcblk0/$partition ] ; then
+#    partition=mmcblk0
+#fi
+
+mkdir -m 0777 /newroot/sdcard
+echo "Running an fsck on the SD card"
+dosfsck -y /dev/block/$partition
+mount -t vfat -o fmask=0000,dmask=0000,utf8,rw,flush,noatime,nodiratime /dev/block/$partition /newroot/sdcard
+[ $? -eq 0 ] || fail "Failed to mount the SD card. Cannot continue."
+
+inf "sdcard mounted"
+
+CARD_PATH=`/bin/grep -o "rel_path=.*" /proc/cmdline | /bin/sed -e "s/.*rel_path=//g" -e "s/ .*//g"`
+
+card=/newroot/sdcard/$CARD_PATH
+
+#data preparing
+mkdir -m 0755 /newroot/data
+if [ -f $card/data.img ]; then 
+    inf "data finded on sdcard, losetup"
+    losetup /dev/block/loop0 $card/data.img
+    [ $? -eq 0 ] || fail "Failed to mount data on SD Card."
+else
+    data_size=`grep -o '\bdata_size=\w*' /proc/cmdline | sed 's/data_size=//'`
+    [ -z $data_size ] && data_size="512"
+    inf "there is no data on sdcard, create new one"
+    dd if=/dev/zero of=$card/data.img bs=1048576 count=$data_size
+    [ $? -eq 0 ] || fail "Failed to allocate the storage"
+    inf "mke2fs data"
+    mke2fs -F $card/data.img
+    [ $? -eq 0 ] || fail "Failed to format the storage"
+    inf "losetup data"
+    losetup /dev/block/loop0 $card/data.img
+    [ $? -eq 0 ] || fail "Failed to mount data on SD Card. after making new data"
+fi
+inf "e2fsck data"
+e2fsck -y /dev/block/loop0
+mount -t ext2 -o noatime,nodiratime,sync /dev/block/loop0 /newroot/data
+[ $? -eq 0 ] || fail "Failed to mount data"
+inf "data mounted"
+
+#system preparing
+mkdir -m 0755 /newroot/system
+losetup /dev/block/loop1 $card/system.ext2
+[ $? -eq 0 ] || fail "Failed to mount system on SD Card."
+
+e2fsck -y /dev/block/loop1
+mount -t ext2 -o noatime,nodiratime /dev/block/loop1 /newroot/system
+[ $? -eq 0 ] || fail "Failed to mount system"
+
+inf "system mounted"
+
+#cache preparing
+mkdir -m 0755 /newroot/cache
+if [ -f $card/cache.img ]; then 
+    inf "cache finded on sdcard, losetup"
+    losetup /dev/block/loop2 $card/cache.img
+    [ $? -eq 0 ] || fail "Failed to mount cache on SD Card."
+else
+    cache_size=`grep -o '\bcache_size=\w*' /proc/cmdline | sed 's/cache_size=//'`
+    [ -z $cache_size ] && cache_size="60"
+    inf "there is no cache on sdcard, create new one"
+    dd if=/dev/zero of=$card/cache.img bs=1048576 count=$cache_size
+    [ $? -eq 0 ] || fail "Failed to allocate the storage"
+    inf "mke2fs cache"
+    mke2fs -F $card/cache.img
+    [ $? -eq 0 ] || fail "Failed to format the storage"
+    inf "cache losetup"
+    losetup /dev/block/loop2 $card/cache.img
+    [ $? -eq 0 ] || fail "Failed to mount cache on SD Card. after making new cache"
+fi
+inf "e2fsck cache"
+e2fsck -y /dev/block/loop2
+mount -t ext2 -o noatime,nodiratime,sync /dev/block/loop2 /newroot/cache
+[ $? -eq 0 ] || fail "Failed to mount cache"
+
+#copy cyanogenmod root files to new root
+cp -ar /cpf/* /newroot/
+
+inf "cpf copied and removed"
+
+mount -t tmpfs -o size=100K tmpfs /newroot/dev
+cp -ar /dev/* /newroot/dev/
+
+inf "devices copied"
+
+#without this android init dont want work
+chmod 777 /newroot/init
+chmod 777 /newroot/sbin/*
+
+#ls /newroot/ >> /newroot/sdcard/12.txt
+umount -l /proc
+umount -l /sys
+
+echo "Switching to rootfs..."
+exec switch_root /newroot/ /init
